@@ -1049,12 +1049,12 @@ static void token_info_pop_gen(struct parser_params*, const char *token, size_t 
 	keyword__FILE__
 	keyword__ENCODING__
 
-%token <id>   tIDENTIFIER tFID tGVAR tIVAR tCONSTANT tCVAR tLABEL
+%token <id>   tIDENTIFIER tFID tGVAR tIVAR tCONSTANT tCVAR tLABEL tPERCENT_BEG
 %token <node> tINTEGER tFLOAT tRATIONAL tIMAGINARY tSTRING_CONTENT tCHAR
 %token <node> tNTH_REF tBACK_REF
 %token <num>  tREGEXP_END
 
-%type <node> singleton strings string string1 xstring regexp
+%type <node> singleton strings string string1 xstring regexp percent
 %type <node> string_contents xstring_contents regexp_contents string_content
 %type <node> words symbols symbol_list qwords qsymbols word_list qword_list qsym_list word
 %type <node> literal numeric simple_numeric dsym cpath
@@ -1119,7 +1119,7 @@ static void token_info_pop_gen(struct parser_params*, const char *token, size_t 
 %token tAMPER		"&"
 %token tLAMBDA		"->"
 %token tSYMBEG tSTRING_BEG tXSTRING_BEG tREGEXP_BEG tWORDS_BEG tQWORDS_BEG tSYMBOLS_BEG tQSYMBOLS_BEG
-%token tSTRING_DBEG tSTRING_DEND tSTRING_DVAR tSTRING_END tLAMBEG tLABEL_END
+%token tSTRING_DBEG tSTRING_DEND tSTRING_DVAR tSTRING_END tLAMBEG tLABEL_END tPERCENT_END
 
 /*
  *	precedence table
@@ -2659,6 +2659,7 @@ primary		: literal
 		| qwords
 		| symbols
 		| qsymbols
+		| percent
 		| var_ref
 		| backref
 		| tFID
@@ -3750,6 +3751,14 @@ method_call	: fcall paren_args
 			$$ = new_qcall($2, $1, ID2VAL(idCall), $4, &@1);
 			nd_set_line($$, $<num>3);
 		    }
+		| primary_value call_op tPERCENT_BEG string_contents tPERCENT_END
+		    {
+		    /*%%%*/
+			$$ = new_qcall($2, $1, $3, new_list($4, &@3), &@1);
+		    /*%
+			$$ = new_qcall($2, $1, $3, arg_add(arg_new(), $4), &@1);
+		    %*/
+		    }
 		| primary_value tCOLON2
 		    {
 		    /*%%%*/
@@ -4164,6 +4173,16 @@ qsym_list	: /* none */
 			nd_set_column($2, @1.first_column);
 		    /*%
 			$$ = dispatch2(qsymbols_add, $1, $2);
+		    %*/
+		    }
+		;
+
+percent		: tPERCENT_BEG string_contents tPERCENT_END
+		    {
+		    /*%%%*/
+			$$ = new_fcall($1, NEW_ARRAY($2), &@1);
+		    /*%
+			$$ = method_arg(dispatch1(fcall, $1), arg_add(arg_new(), $2));
 		    %*/
 		    }
 		;
@@ -5822,25 +5841,28 @@ rb_parser_compile_file_path(VALUE vparser, VALUE fname, VALUE file, int start)
 }
 #endif  /* !RIPPER */
 
-#define STR_FUNC_ESCAPE 0x01
-#define STR_FUNC_EXPAND 0x02
-#define STR_FUNC_REGEXP 0x04
-#define STR_FUNC_QWORDS 0x08
-#define STR_FUNC_SYMBOL 0x10
-#define STR_FUNC_INDENT 0x20
-#define STR_FUNC_LABEL  0x40
-#define STR_FUNC_TERM   0x8000
+#define STR_FUNC_ESCAPE  0x01
+#define STR_FUNC_EXPAND  0x02
+#define STR_FUNC_REGEXP  0x04
+#define STR_FUNC_QWORDS  0x08
+#define STR_FUNC_SYMBOL  0x10
+#define STR_FUNC_INDENT  0x20
+#define STR_FUNC_LABEL   0x40
+#define STR_FUNC_PERCENT 0x80
+#define STR_FUNC_TERM    0x8000
 
 enum string_type {
-    str_label  = STR_FUNC_LABEL,
-    str_squote = (0),
-    str_dquote = (STR_FUNC_EXPAND),
-    str_xquote = (STR_FUNC_EXPAND),
-    str_regexp = (STR_FUNC_REGEXP|STR_FUNC_ESCAPE|STR_FUNC_EXPAND),
-    str_sword  = (STR_FUNC_QWORDS),
-    str_dword  = (STR_FUNC_QWORDS|STR_FUNC_EXPAND),
-    str_ssym   = (STR_FUNC_SYMBOL),
-    str_dsym   = (STR_FUNC_SYMBOL|STR_FUNC_EXPAND)
+    str_label        = STR_FUNC_LABEL,
+    str_squote       = (0),
+    str_dquote       = (STR_FUNC_EXPAND),
+    str_xquote       = (STR_FUNC_EXPAND),
+    str_regexp       = (STR_FUNC_REGEXP|STR_FUNC_ESCAPE|STR_FUNC_EXPAND),
+    str_sword        = (STR_FUNC_QWORDS),
+    str_dword        = (STR_FUNC_QWORDS|STR_FUNC_EXPAND),
+    str_ssym         = (STR_FUNC_SYMBOL),
+    str_dsym         = (STR_FUNC_SYMBOL|STR_FUNC_EXPAND),
+    str_percentupper = (STR_FUNC_PERCENT|STR_FUNC_EXPAND),
+    str_percentlower = (STR_FUNC_PERCENT),
 };
 
 static VALUE
@@ -6624,6 +6646,10 @@ parser_string_term(struct parser_params *parser, int func)
 	SET_LEX_STATE(EXPR_END|EXPR_ENDARG);
 	return tREGEXP_END;
     }
+    if (func & STR_FUNC_PERCENT) {
+	SET_LEX_STATE(EXPR_END|EXPR_ENDARG);
+	return tPERCENT_END;
+    }
     if ((func & STR_FUNC_LABEL) && IS_LABEL_SUFFIX(0)) {
 	nextc();
 	SET_LEX_STATE(EXPR_BEG|EXPR_LABEL);
@@ -6646,7 +6672,13 @@ parser_parse_string(struct parser_params *parser, rb_strterm_literal_t *quote)
     if (func & STR_FUNC_TERM) {
 	SET_LEX_STATE(EXPR_END|EXPR_ENDARG);
 	lex_strterm = 0;
-	return func & STR_FUNC_REGEXP ? tREGEXP_END : tSTRING_END;
+	if (func & STR_FUNC_REGEXP) {
+	    return tREGEXP_END;
+	} else if (func & STR_FUNC_PERCENT) {
+	    return tPERCENT_END;
+	} else {
+	    return tSTRING_END;
+	}
     }
     c = nextc();
     if ((func & STR_FUNC_QWORDS) && ISSPACE(c)) {
@@ -6683,8 +6715,9 @@ parser_parse_string(struct parser_params *parser, rb_strterm_literal_t *quote)
 	    literal_flush(lex_p);
 	    if (func & STR_FUNC_REGEXP) {
 		unterminated_literal("unterminated regexp meets end of file");
-	    }
-	    else {
+	    } else if (func & STR_FUNC_PERCENT) {
+		unterminated_literal("unterminated percent literal end of file");
+	    } else {
 		unterminated_literal("unterminated string meets end of file");
 	    }
 	    quote->u1.func |= STR_FUNC_TERM;
@@ -7900,103 +7933,6 @@ parse_qmark(struct parser_params *parser, int space_seen)
     return tCHAR;
 }
 
-static enum yytokentype
-parse_percent(struct parser_params *parser, const int space_seen, const enum lex_state_e last_state)
-{
-    register int c;
-
-    if (IS_BEG()) {
-	int term;
-	int paren;
-
-	c = nextc();
-      quotation:
-	if (c == -1 || !ISALNUM(c)) {
-	    term = c;
-	    c = 'Q';
-	}
-	else {
-	    term = nextc();
-	    if (rb_enc_isalnum(term, current_enc) || !parser_isascii()) {
-		yyerror0("unknown type of %string");
-		return 0;
-	    }
-	}
-	if (c == -1 || term == -1) {
-	    compile_error(PARSER_ARG "unterminated quoted string meets end of file");
-	    return 0;
-	}
-	paren = term;
-	if (term == '(') term = ')';
-	else if (term == '[') term = ']';
-	else if (term == '{') term = '}';
-	else if (term == '<') term = '>';
-	else paren = 0;
-
-	switch (c) {
-	  case 'Q':
-	    lex_strterm = NEW_STRTERM(str_dquote, term, paren);
-	    return tSTRING_BEG;
-
-	  case 'q':
-	    lex_strterm = NEW_STRTERM(str_squote, term, paren);
-	    return tSTRING_BEG;
-
-	  case 'W':
-	    lex_strterm = NEW_STRTERM(str_dword, term, paren);
-	    do {c = nextc();} while (ISSPACE(c));
-	    pushback(c);
-	    return tWORDS_BEG;
-
-	  case 'w':
-	    lex_strterm = NEW_STRTERM(str_sword, term, paren);
-	    do {c = nextc();} while (ISSPACE(c));
-	    pushback(c);
-	    return tQWORDS_BEG;
-
-	  case 'I':
-	    lex_strterm = NEW_STRTERM(str_dword, term, paren);
-	    do {c = nextc();} while (ISSPACE(c));
-	    pushback(c);
-	    return tSYMBOLS_BEG;
-
-	  case 'i':
-	    lex_strterm = NEW_STRTERM(str_sword, term, paren);
-	    do {c = nextc();} while (ISSPACE(c));
-	    pushback(c);
-	    return tQSYMBOLS_BEG;
-
-	  case 'x':
-	    lex_strterm = NEW_STRTERM(str_xquote, term, paren);
-	    return tXSTRING_BEG;
-
-	  case 'r':
-	    lex_strterm = NEW_STRTERM(str_regexp, term, paren);
-	    return tREGEXP_BEG;
-
-	  case 's':
-	    lex_strterm = NEW_STRTERM(str_ssym, term, paren);
-	    SET_LEX_STATE(EXPR_FNAME|EXPR_FITEM);
-	    return tSYMBEG;
-
-	  default:
-	    yyerror0("unknown type of %string");
-	    return 0;
-	}
-    }
-    if ((c = nextc()) == '=') {
-	set_yylval_id('%');
-	SET_LEX_STATE(EXPR_BEG);
-	return tOP_ASGN;
-    }
-    if (IS_SPCARG(c) || (IS_lex_state(EXPR_FITEM) && c == 's')) {
-	goto quotation;
-    }
-    SET_LEX_STATE(IS_AFTER_OPERATOR() ? EXPR_ARG : EXPR_BEG);
-    pushback(c);
-    return warn_balanced('%', "%%", "string literal");
-}
-
 static int
 tokadd_ident(struct parser_params *parser, int c)
 {
@@ -8016,6 +7952,140 @@ tokenize_ident(struct parser_params *parser, const enum lex_state_e last_state)
     set_yylval_name(ident);
 
     return ident;
+}
+
+static enum yytokentype
+parse_percent(struct parser_params *parser, const int space_seen, const enum lex_state_e last_state)
+{
+    register int c;
+
+    if (IS_BEG() || IS_lex_state(EXPR_DOT)) {
+	static const char default_ident[2] = "%Q";
+	const char *ident;
+	int identlen;
+	int term;
+	int paren;
+
+	c = nextc();
+      quotation:
+	if (c == -1 || !parser_is_identchar()) {
+	    ident = default_ident;
+	    identlen = sizeof(default_ident);
+	    term = c;
+	}
+	else {
+	    ident = lex_p - 2;
+
+	    do {
+		int ident_mbclen = parser_precise_mbclen(parser, lex_p - 1);
+
+		if (ident_mbclen < 0) {
+		    return 0;
+		}
+
+		lex_p += ident_mbclen;
+	    } while (parser_is_identchar());
+
+	    if (!parser_isascii()) {
+		yyerror0("unknown type of %string");
+		return 0;
+	    }
+
+	    identlen = (int)(lex_p - ident) - 1;
+	    term = lex_p[-1];
+	}
+	if (c == -1 || term == -1) {
+	    compile_error(PARSER_ARG "unterminated quoted string meets end of file");
+	    return 0;
+	}
+	paren = term;
+	if (term == '(') term = ')';
+	else if (term == '[') term = ']';
+	else if (term == '{') term = '}';
+	else if (term == '<') term = '>';
+	else paren = 0;
+
+	if (identlen == 2) {
+	    switch (ident[1]) {
+	      case 'Q':
+		lex_strterm = NEW_STRTERM(str_dquote, term, paren);
+		return tSTRING_BEG;
+
+	      case 'q':
+		lex_strterm = NEW_STRTERM(str_squote, term, paren);
+		return tSTRING_BEG;
+
+	    case 'W':
+		lex_strterm = NEW_STRTERM(str_dword, term, paren);
+		do {c = nextc();} while (ISSPACE(c));
+		pushback(c);
+		return tWORDS_BEG;
+
+	    case 'w':
+		lex_strterm = NEW_STRTERM(str_sword, term, paren);
+		do {c = nextc();} while (ISSPACE(c));
+		pushback(c);
+		return tQWORDS_BEG;
+
+	    case 'I':
+		lex_strterm = NEW_STRTERM(str_dword, term, paren);
+		do {c = nextc();} while (ISSPACE(c));
+		pushback(c);
+		return tSYMBOLS_BEG;
+
+	    case 'i':
+		lex_strterm = NEW_STRTERM(str_sword, term, paren);
+		do {c = nextc();} while (ISSPACE(c));
+		pushback(c);
+		return tQSYMBOLS_BEG;
+
+	    case 'x':
+		lex_strterm = NEW_STRTERM(str_xquote, term, paren);
+		return tXSTRING_BEG;
+
+	    case 'r':
+		lex_strterm = NEW_STRTERM(str_regexp, term, paren);
+		return tREGEXP_BEG;
+
+	    case 's':
+		lex_strterm = NEW_STRTERM(str_ssym, term, paren);
+		SET_LEX_STATE(EXPR_FNAME|EXPR_FITEM);
+		return tSYMBEG;
+
+	    default:
+		break;
+	    }
+	}
+
+	newtok();
+	memcpy(tokspace(identlen), ident, identlen);
+	tokenize_ident(parser, last_state);
+
+	lex_strterm = NEW_STRTERM(
+	    rb_enc_isupper(ident[1], current_enc) ? str_percentupper : str_percentlower,
+	    term,
+	    paren);
+
+	return tPERCENT_BEG;
+    }
+    if ((c = nextc()) == '=') {
+	set_yylval_id('%');
+	SET_LEX_STATE(EXPR_BEG);
+	return tOP_ASGN;
+    }
+    if (IS_SPCARG(c) || (IS_lex_state(EXPR_FITEM) && c == 's')) {
+	goto quotation;
+    }
+    pushback(c);
+    if (IS_AFTER_OPERATOR()) {
+	newtok();
+	if (tokadd_ident(parser, '%')) return 0;
+	SET_LEX_STATE(EXPR_ARG);
+	tokenize_ident(parser, last_state);
+	return tFID;
+    }
+    SET_LEX_STATE(EXPR_BEG);
+    return warn_balanced('%', "%%", "string literal");
 }
 
 static int
