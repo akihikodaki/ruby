@@ -7545,83 +7545,16 @@ parse_percent(struct parser_params *parser, const int space_seen, const enum lex
     register int c;
 
     if (IS_BEG()) {
+	static const char default_type[1] = "Q";
+	const char *type;
 	int term;
 	int paren;
+	int typen;
 
 	c = nextc();
       quotation:
-	if (c == -1 || !ISALNUM(c)) {
-	    term = c;
-	    c = 'Q';
-	}
-	else {
-	    term = nextc();
-	    if (rb_enc_isalnum(term, current_enc) || !parser_isascii()) {
-		yyerror("unknown type of %string");
-		return 0;
-	    }
-	}
-	if (c == -1 || term == -1) {
-	    compile_error(PARSER_ARG "unterminated quoted string meets end of file");
-	    return 0;
-	}
-	paren = term;
-	if (term == '(') term = ')';
-	else if (term == '[') term = ']';
-	else if (term == '{') term = '}';
-	else if (term == '<') term = '>';
-	else paren = 0;
-
-	switch (c) {
-	  case 'Q':
-	    lex_strterm = NEW_STRTERM(str_dquote, term, paren);
-	    return tSTRING_BEG;
-
-	  case 'q':
-	    lex_strterm = NEW_STRTERM(str_squote, term, paren);
-	    return tSTRING_BEG;
-
-	  case 'W':
-	    lex_strterm = NEW_STRTERM(str_dword, term, paren);
-	    do {c = nextc();} while (ISSPACE(c));
-	    pushback(c);
-	    return tWORDS_BEG;
-
-	  case 'w':
-	    lex_strterm = NEW_STRTERM(str_sword, term, paren);
-	    do {c = nextc();} while (ISSPACE(c));
-	    pushback(c);
-	    return tQWORDS_BEG;
-
-	  case 'I':
-	    lex_strterm = NEW_STRTERM(str_dword, term, paren);
-	    do {c = nextc();} while (ISSPACE(c));
-	    pushback(c);
-	    return tSYMBOLS_BEG;
-
-	  case 'i':
-	    lex_strterm = NEW_STRTERM(str_sword, term, paren);
-	    do {c = nextc();} while (ISSPACE(c));
-	    pushback(c);
-	    return tQSYMBOLS_BEG;
-
-	  case 'x':
-	    lex_strterm = NEW_STRTERM(str_xquote, term, paren);
-	    return tXSTRING_BEG;
-
-	  case 'r':
-	    lex_strterm = NEW_STRTERM(str_regexp, term, paren);
-	    return tREGEXP_BEG;
-
-	  case 's':
-	    lex_strterm = NEW_STRTERM(str_ssym, term, paren);
-	    SET_LEX_STATE(EXPR_FNAME|EXPR_FITEM);
-	    return tSYMBEG;
-
-	  default:
-	    yyerror("unknown type of %string");
-	    return 0;
-	}
+	SET_LEX_STATE(EXPR_PERCENT);
+	return tPERCENT;
     }
     if ((c = nextc()) == '=') {
 	set_yylval_id('%');
@@ -7952,393 +7885,6 @@ parser_yylex(struct parser_params *parser)
       case -1:			/* end of script. */
 	return 0;
 
-	/* white spaces */
-      case ' ': case '\t': case '\f': case '\r':
-      case '\13': /* '\v' */
-	space_seen = 1;
-#ifdef RIPPER
-	while ((c = nextc())) {
-	    switch (c) {
-	      case ' ': case '\t': case '\f': case '\r':
-	      case '\13': /* '\v' */
-		break;
-	      default:
-		goto outofloop;
-	    }
-	}
-      outofloop:
-	pushback(c);
-	dispatch_scan_event(tSP);
-#endif
-	goto retry;
-
-      case '#':		/* it's a comment */
-	parser->token_seen = token_seen;
-	/* no magic_comment in shebang line */
-	if (!parser_magic_comment(parser, lex_p, lex_pend - lex_p)) {
-	    if (comment_at_top(parser)) {
-		set_file_encoding(parser, lex_p, lex_pend);
-	    }
-	}
-	lex_p = lex_pend;
-        dispatch_scan_event(tCOMMENT);
-        fallthru = TRUE;
-	/* fall through */
-      case '\n':
-	parser->token_seen = token_seen;
-	c = (IS_lex_state(EXPR_BEG|EXPR_CLASS|EXPR_FNAME|EXPR_DOT) &&
-	     !IS_lex_state(EXPR_LABELED));
-	if (c || IS_lex_state_all(EXPR_ARG|EXPR_LABELED)) {
-            if (!fallthru) {
-                dispatch_scan_event(tIGNORED_NL);
-            }
-            fallthru = FALSE;
-	    if (!c && parser->in_kwarg) {
-		goto normal_newline;
-	    }
-	    goto retry;
-	}
-	while ((c = nextc())) {
-	    switch (c) {
-	      case ' ': case '\t': case '\f': case '\r':
-	      case '\13': /* '\v' */
-		space_seen = 1;
-		break;
-	      case '&':
-	      case '.': {
-		dispatch_delayed_token(tIGNORED_NL);
-		if (peek('.') == (c == '&')) {
-		    pushback(c);
-		    dispatch_scan_event(tSP);
-		    goto retry;
-		}
-	      }
-	      default:
-		--ruby_sourceline;
-		lex_nextline = lex_lastline;
-	      case -1:		/* EOF no decrement*/
-		lex_goto_eol(parser);
-#ifdef RIPPER
-		if (c != -1) {
-		    parser->tokp = lex_p;
-		}
-#endif
-		goto normal_newline;
-	    }
-	}
-      normal_newline:
-	command_start = TRUE;
-	SET_LEX_STATE(EXPR_BEG);
-	return '\n';
-
-      case '*':
-	if ((c = nextc()) == '*') {
-	    if ((c = nextc()) == '=') {
-                set_yylval_id(tPOW);
-		SET_LEX_STATE(EXPR_BEG);
-		return tOP_ASGN;
-	    }
-	    pushback(c);
-	    if (IS_SPCARG(c)) {
-		rb_warning0("`**' interpreted as argument prefix");
-		c = tDSTAR;
-	    }
-	    else if (IS_BEG()) {
-		c = tDSTAR;
-	    }
-	    else {
-		c = warn_balanced((enum ruby_method_ids)tPOW, "**", "argument prefix");
-	    }
-	}
-	else {
-	    if (c == '=') {
-                set_yylval_id('*');
-		SET_LEX_STATE(EXPR_BEG);
-		return tOP_ASGN;
-	    }
-	    pushback(c);
-	    if (IS_SPCARG(c)) {
-		rb_warning0("`*' interpreted as argument prefix");
-		c = tSTAR;
-	    }
-	    else if (IS_BEG()) {
-		c = tSTAR;
-	    }
-	    else {
-		c = warn_balanced('*', "*", "argument prefix");
-	    }
-	}
-	SET_LEX_STATE(IS_AFTER_OPERATOR() ? EXPR_ARG : EXPR_BEG);
-	return c;
-
-      case '!':
-	c = nextc();
-	if (IS_AFTER_OPERATOR()) {
-	    SET_LEX_STATE(EXPR_ARG);
-	    if (c == '@') {
-		return '!';
-	    }
-	}
-	else {
-	    SET_LEX_STATE(EXPR_BEG);
-	}
-	if (c == '=') {
-	    return tNEQ;
-	}
-	if (c == '~') {
-	    return tNMATCH;
-	}
-	pushback(c);
-	return '!';
-
-      case '=':
-	if (was_bol()) {
-	    /* skip embedded rd document */
-	    if (strncmp(lex_p, "begin", 5) == 0 && ISSPACE(lex_p[5])) {
-		int first_p = TRUE;
-
-		lex_goto_eol(parser);
-		dispatch_scan_event(tEMBDOC_BEG);
-		for (;;) {
-		    lex_goto_eol(parser);
-		    if (!first_p) {
-			dispatch_scan_event(tEMBDOC);
-		    }
-		    first_p = FALSE;
-		    c = nextc();
-		    if (c == -1) {
-			compile_error(PARSER_ARG "embedded document meets end of file");
-			return 0;
-		    }
-		    if (c != '=') continue;
-		    if (c == '=' && strncmp(lex_p, "end", 3) == 0 &&
-			(lex_p + 3 == lex_pend || ISSPACE(lex_p[3]))) {
-			break;
-		    }
-		}
-		lex_goto_eol(parser);
-		dispatch_scan_event(tEMBDOC_END);
-		goto retry;
-	    }
-	}
-
-	SET_LEX_STATE(IS_AFTER_OPERATOR() ? EXPR_ARG : EXPR_BEG);
-	if ((c = nextc()) == '=') {
-	    if ((c = nextc()) == '=') {
-		return tEQQ;
-	    }
-	    pushback(c);
-	    return tEQ;
-	}
-	if (c == '~') {
-	    return tMATCH;
-	}
-	else if (c == '>') {
-	    return tASSOC;
-	}
-	pushback(c);
-	return '=';
-
-      case '<':
-	last_state = lex_state;
-	c = nextc();
-	if (c == '<' &&
-	    !IS_lex_state(EXPR_DOT | EXPR_CLASS) &&
-	    !IS_END() &&
-	    (!IS_ARG() || IS_lex_state(EXPR_LABELED) || space_seen)) {
-	    int token = heredoc_identifier();
-	    if (token) return token;
-	}
-	if (IS_AFTER_OPERATOR()) {
-	    SET_LEX_STATE(EXPR_ARG);
-	}
-	else {
-	    if (IS_lex_state(EXPR_CLASS))
-		command_start = TRUE;
-	    SET_LEX_STATE(EXPR_BEG);
-	}
-	if (c == '=') {
-	    if ((c = nextc()) == '>') {
-		return tCMP;
-	    }
-	    pushback(c);
-	    return tLEQ;
-	}
-	if (c == '<') {
-	    if ((c = nextc()) == '=') {
-                set_yylval_id(tLSHFT);
-		SET_LEX_STATE(EXPR_BEG);
-		return tOP_ASGN;
-	    }
-	    pushback(c);
-	    return warn_balanced((enum ruby_method_ids)tLSHFT, "<<", "here document");
-	}
-	pushback(c);
-	return '<';
-
-      case '>':
-	SET_LEX_STATE(IS_AFTER_OPERATOR() ? EXPR_ARG : EXPR_BEG);
-	if ((c = nextc()) == '=') {
-	    return tGEQ;
-	}
-	if (c == '>') {
-	    if ((c = nextc()) == '=') {
-                set_yylval_id(tRSHFT);
-		SET_LEX_STATE(EXPR_BEG);
-		return tOP_ASGN;
-	    }
-	    pushback(c);
-	    return tRSHFT;
-	}
-	pushback(c);
-	return '>';
-
-      case '"':
-	label = (IS_LABEL_POSSIBLE() ? str_label : 0);
-	lex_strterm = NEW_STRTERM(str_dquote | label, '"', 0);
-	return tSTRING_BEG;
-
-      case '`':
-	if (IS_lex_state(EXPR_FNAME)) {
-	    SET_LEX_STATE(EXPR_ENDFN);
-	    return c;
-	}
-	if (IS_lex_state(EXPR_DOT)) {
-	    if (cmd_state)
-		SET_LEX_STATE(EXPR_CMDARG);
-	    else
-		SET_LEX_STATE(EXPR_ARG);
-	    return c;
-	}
-	lex_strterm = NEW_STRTERM(str_xquote, '`', 0);
-	return tXSTRING_BEG;
-
-      case '\'':
-	label = (IS_LABEL_POSSIBLE() ? str_label : 0);
-	lex_strterm = NEW_STRTERM(str_squote | label, '\'', 0);
-	return tSTRING_BEG;
-
-      case '?':
-	return parse_qmark(parser, space_seen);
-
-      case '&':
-	if ((c = nextc()) == '&') {
-	    SET_LEX_STATE(EXPR_BEG);
-	    if ((c = nextc()) == '=') {
-                set_yylval_id(tANDOP);
-		SET_LEX_STATE(EXPR_BEG);
-		return tOP_ASGN;
-	    }
-	    pushback(c);
-	    return tANDOP;
-	}
-	else if (c == '=') {
-            set_yylval_id('&');
-	    SET_LEX_STATE(EXPR_BEG);
-	    return tOP_ASGN;
-	}
-	else if (c == '.') {
-	    SET_LEX_STATE(EXPR_DOT);
-	    return tANDDOT;
-	}
-	pushback(c);
-	if (IS_SPCARG(c)) {
-	    if ((c != ':') ||
-		(c = peekc_n(1)) == -1 ||
-		!(c == '\'' || c == '"' ||
-		  is_identchar((lex_p+1), lex_pend, current_enc))) {
-		rb_warning0("`&' interpreted as argument prefix");
-	    }
-	    c = tAMPER;
-	}
-	else if (IS_BEG()) {
-	    c = tAMPER;
-	}
-	else {
-	    c = warn_balanced('&', "&", "argument prefix");
-	}
-	SET_LEX_STATE(IS_AFTER_OPERATOR() ? EXPR_ARG : EXPR_BEG);
-	return c;
-
-      case '|':
-	if ((c = nextc()) == '|') {
-	    SET_LEX_STATE(EXPR_BEG);
-	    if ((c = nextc()) == '=') {
-                set_yylval_id(tOROP);
-		SET_LEX_STATE(EXPR_BEG);
-		return tOP_ASGN;
-	    }
-	    pushback(c);
-	    return tOROP;
-	}
-	if (c == '=') {
-            set_yylval_id('|');
-	    SET_LEX_STATE(EXPR_BEG);
-	    return tOP_ASGN;
-	}
-	SET_LEX_STATE(IS_AFTER_OPERATOR() ? EXPR_ARG : EXPR_BEG|EXPR_LABEL);
-	pushback(c);
-	return '|';
-
-      case '+':
-	c = nextc();
-	if (IS_AFTER_OPERATOR()) {
-	    SET_LEX_STATE(EXPR_ARG);
-	    if (c == '@') {
-		return tUPLUS;
-	    }
-	    pushback(c);
-	    return '+';
-	}
-	if (c == '=') {
-            set_yylval_id('+');
-	    SET_LEX_STATE(EXPR_BEG);
-	    return tOP_ASGN;
-	}
-	if (IS_BEG() || (IS_SPCARG(c) && arg_ambiguous('+'))) {
-	    SET_LEX_STATE(EXPR_BEG);
-	    pushback(c);
-	    if (c != -1 && ISDIGIT(c)) {
-		return parse_numeric(parser, '+');
-	    }
-	    return tUPLUS;
-	}
-	SET_LEX_STATE(EXPR_BEG);
-	pushback(c);
-	return warn_balanced('+', "+", "unary operator");
-
-      case '-':
-	c = nextc();
-	if (IS_AFTER_OPERATOR()) {
-	    SET_LEX_STATE(EXPR_ARG);
-	    if (c == '@') {
-		return tUMINUS;
-	    }
-	    pushback(c);
-	    return '-';
-	}
-	if (c == '=') {
-            set_yylval_id('-');
-	    SET_LEX_STATE(EXPR_BEG);
-	    return tOP_ASGN;
-	}
-	if (c == '>') {
-	    SET_LEX_STATE(EXPR_ENDFN);
-	    token_info_push("->");
-	    return tLAMBDA;
-	}
-	if (IS_BEG() || (IS_SPCARG(c) && arg_ambiguous('-'))) {
-	    SET_LEX_STATE(EXPR_BEG);
-	    pushback(c);
-	    if (c != -1 && ISDIGIT(c)) {
-		return tUMINUS_NUM;
-	    }
-	    return tUMINUS;
-	}
-	SET_LEX_STATE(EXPR_BEG);
-	pushback(c);
-	return warn_balanced('-', "-", "unary operator");
-
       case '.':
 	SET_LEX_STATE(EXPR_BEG);
 	if ((c = nextc()) == '.') {
@@ -8354,25 +7900,6 @@ parser_yylex(struct parser_params *parser)
 	}
 	SET_LEX_STATE(EXPR_DOT);
 	return '.';
-
-      case '0': case '1': case '2': case '3': case '4':
-      case '5': case '6': case '7': case '8': case '9':
-	return parse_numeric(parser, c);
-
-      case ')':
-      case ']':
-	paren_nest--;
-      case '}':
-	COND_LEXPOP();
-	CMDARG_LEXPOP();
-	if (c == ')')
-	    SET_LEX_STATE(EXPR_ENDFN);
-	else
-	    SET_LEX_STATE(EXPR_END);
-	if (c == '}') {
-	    if (!brace_nest--) c = tSTRING_DEND;
-	}
-	return c;
 
       case ':':
 	c = nextc();
@@ -8404,145 +7931,6 @@ parser_yylex(struct parser_params *parser)
 	SET_LEX_STATE(EXPR_FNAME);
 	return tSYMBEG;
 
-      case '/':
-	if (IS_BEG()) {
-	    lex_strterm = NEW_STRTERM(str_regexp, '/', 0);
-	    return tREGEXP_BEG;
-	}
-	if ((c = nextc()) == '=') {
-            set_yylval_id('/');
-	    SET_LEX_STATE(EXPR_BEG);
-	    return tOP_ASGN;
-	}
-	pushback(c);
-	if (IS_SPCARG(c)) {
-	    (void)arg_ambiguous('/');
-	    lex_strterm = NEW_STRTERM(str_regexp, '/', 0);
-	    return tREGEXP_BEG;
-	}
-	SET_LEX_STATE(IS_AFTER_OPERATOR() ? EXPR_ARG : EXPR_BEG);
-	return warn_balanced('/', "/", "regexp literal");
-
-      case '^':
-	if ((c = nextc()) == '=') {
-            set_yylval_id('^');
-	    SET_LEX_STATE(EXPR_BEG);
-	    return tOP_ASGN;
-	}
-	SET_LEX_STATE(IS_AFTER_OPERATOR() ? EXPR_ARG : EXPR_BEG);
-	pushback(c);
-	return '^';
-
-      case ';':
-	SET_LEX_STATE(EXPR_BEG);
-	command_start = TRUE;
-	return ';';
-
-      case ',':
-	SET_LEX_STATE(EXPR_BEG|EXPR_LABEL);
-	return ',';
-
-      case '~':
-	if (IS_AFTER_OPERATOR()) {
-	    if ((c = nextc()) != '@') {
-		pushback(c);
-	    }
-	    SET_LEX_STATE(EXPR_ARG);
-	}
-	else {
-	    SET_LEX_STATE(EXPR_BEG);
-	}
-	return '~';
-
-      case '(':
-	if (IS_BEG()) {
-	    c = tLPAREN;
-	}
-	else if (IS_SPCARG(-1)) {
-	    c = tLPAREN_ARG;
-	}
-	else if (IS_lex_state(EXPR_ENDFN) && space_seen && !lambda_beginning_p()) {
-	    rb_warning0("parentheses after method name is interpreted as "
-			"an argument list, not a decomposed argument");
-	}
-	else if (lex_state == (EXPR_END|EXPR_LABEL) && space_seen) {
-	    c = tLPAREN_ARG;
-	}
-	paren_nest++;
-	COND_PUSH(0);
-	CMDARG_PUSH(0);
-	SET_LEX_STATE(EXPR_BEG|EXPR_LABEL);
-	return c;
-
-      case '[':
-	paren_nest++;
-	if (IS_AFTER_OPERATOR()) {
-	    if ((c = nextc()) == ']') {
-		SET_LEX_STATE(EXPR_ARG);
-		if ((c = nextc()) == '=') {
-		    return tASET;
-		}
-		pushback(c);
-		return tAREF;
-	    }
-	    pushback(c);
-	    SET_LEX_STATE(EXPR_ARG|EXPR_LABEL);
-	    return '[';
-	}
-	else if (IS_BEG()) {
-	    c = tLBRACK;
-	}
-	else if (IS_ARG() && (space_seen || IS_lex_state(EXPR_LABELED))) {
-	    c = tLBRACK;
-	}
-	SET_LEX_STATE(EXPR_BEG|EXPR_LABEL);
-	COND_PUSH(0);
-	CMDARG_PUSH(0);
-	return c;
-
-      case '{':
-	++brace_nest;
-	if (lambda_beginning_p()) {
-	    SET_LEX_STATE(EXPR_BEG);
-	    lpar_beg = 0;
-	    --paren_nest;
-	    COND_PUSH(0);
-	    CMDARG_PUSH(0);
-	    return tLAMBEG;
-	}
-	if (IS_lex_state(EXPR_LABELED))
-	    c = tLBRACE;      /* hash */
-	else if (IS_lex_state(EXPR_ARG_ANY | EXPR_END | EXPR_ENDFN))
-	    c = '{';          /* block (primary) */
-	else if (IS_lex_state(EXPR_ENDARG))
-	    c = tLBRACE_ARG;  /* block (expr) */
-	else
-	    c = tLBRACE;      /* hash */
-	COND_PUSH(0);
-	CMDARG_PUSH(0);
-	SET_LEX_STATE(c == tLBRACE_ARG ? EXPR_BEG : EXPR_BEG|EXPR_LABEL);
-	if (c != tLBRACE) command_start = TRUE;
-	return c;
-
-      case '\\':
-	c = nextc();
-	if (c == '\n') {
-	    space_seen = 1;
-	    dispatch_scan_event(tSP);
-	    goto retry; /* skip \\n */
-	}
-	pushback(c);
-	return '\\';
-
-      case '%':
-	return parse_percent(parser, space_seen, last_state);
-
-      case '$':
-	return parse_gvar(parser, last_state);
-
-      case '@':
-	return parse_atmark(parser, last_state);
-
       case '_':
 	if (was_bol() && whole_match_p("__END__", 7, 0)) {
 	    ruby__end__seen = 1;
@@ -8550,22 +7938,589 @@ parser_yylex(struct parser_params *parser)
 #ifndef RIPPER
 	    return -1;
 #else
-            lex_goto_eol(parser);
-            dispatch_scan_event(k__END__);
-            return 0;
+	    lex_goto_eol(parser);
+	    dispatch_scan_event(k__END__);
+	    return 0;
 #endif
 	}
 	newtok();
 	break;
 
       default:
-	if (!parser_is_identchar()) {
-	    compile_error(PARSER_ARG  "Invalid char `\\x%02X' in expression", c);
-	    goto retry;
+	if (parser_is_identchar()) {
+	    newtok();
+	    break;
 	}
 
-	newtok();
-	break;
+	if (IS_lex_state(EXPR_PERCENT)) {
+	    int paren = c;
+	    if (c == '(') {
+		c = ')';
+	    } else if (c == '[') {
+		c = ']';
+	    } else if (c == '{') {
+		c = '}';
+	    } else if (c == '<') {
+		c = '>';
+	    } else if (rb_enc_isalnum(c, current_enc) || !parser_isascii()) {
+		yyerror("unknown type of %string");
+		return 0;
+	    } else paren = 0;
+
+	    lex_strterm = NEW_STRTERM(str_squote, term, paren);
+	    return tSTRING_BEG;
+	} else {
+	    switch (c) {
+		/* white spaces */
+		case ' ': case '\t': case '\f': case '\r':
+		case '\13': /* '\v' */
+		space_seen = 1;
+#ifdef RIPPER
+		while ((c = nextc())) {
+		    switch (c) {
+		      case ' ': case '\t': case '\f': case '\r':
+		      case '\13': /* '\v' */
+			break;
+		      default:
+			goto outofloop;
+		    }
+		}
+	      outofloop:
+		pushback(c);
+		dispatch_scan_event(tSP);
+#endif
+		goto retry;
+
+	      case '#':		/* it's a comment */
+		parser->token_seen = token_seen;
+		/* no magic_comment in shebang line */
+		if (!parser_magic_comment(parser, lex_p, lex_pend - lex_p)) {
+		    if (comment_at_top(parser)) {
+			set_file_encoding(parser, lex_p, lex_pend);
+		    }
+		}
+		lex_p = lex_pend;
+		dispatch_scan_event(tCOMMENT);
+		fallthru = TRUE;
+		/* fall through */
+	      case '\n':
+		parser->token_seen = token_seen;
+		c = (IS_lex_state(EXPR_BEG|EXPR_CLASS|EXPR_FNAME|EXPR_DOT) &&
+		     !IS_lex_state(EXPR_LABELED));
+		if (c || IS_lex_state_all(EXPR_ARG|EXPR_LABELED)) {
+		    if (!fallthru) {
+			dispatch_scan_event(tIGNORED_NL);
+		    }
+		    fallthru = FALSE;
+		    if (!c && parser->in_kwarg) {
+			goto normal_newline;
+		    }
+		    goto retry;
+		}
+		while ((c = nextc())) {
+		    switch (c) {
+		      case ' ': case '\t': case '\f': case '\r':
+		      case '\13': /* '\v' */
+			space_seen = 1;
+			break;
+		      case '&':
+		      case '.': {
+			dispatch_delayed_token(tIGNORED_NL);
+			if (peek('.') == (c == '&')) {
+			    pushback(c);
+			    dispatch_scan_event(tSP);
+			    goto retry;
+			}
+		      }
+		      default:
+			--ruby_sourceline;
+			lex_nextline = lex_lastline;
+		      case -1:		/* EOF no decrement*/
+			lex_goto_eol(parser);
+#ifdef RIPPER
+			if (c != -1) {
+			    parser->tokp = lex_p;
+			}
+#endif
+			goto normal_newline;
+		    }
+		}
+	      normal_newline:
+		command_start = TRUE;
+		SET_LEX_STATE(EXPR_BEG);
+		return '\n';
+
+	      case '*':
+		if ((c = nextc()) == '*') {
+		    if ((c = nextc()) == '=') {
+			set_yylval_id(tPOW);
+			SET_LEX_STATE(EXPR_BEG);
+			return tOP_ASGN;
+		    }
+		    pushback(c);
+		    if (IS_SPCARG(c)) {
+			rb_warning0("`**' interpreted as argument prefix");
+			c = tDSTAR;
+		    }
+		    else if (IS_BEG()) {
+			c = tDSTAR;
+		    }
+		    else {
+			c = warn_balanced((enum ruby_method_ids)tPOW, "**", "argument prefix");
+		    }
+		}
+		else {
+		    if (c == '=') {
+			set_yylval_id('*');
+			SET_LEX_STATE(EXPR_BEG);
+			return tOP_ASGN;
+		    }
+		    pushback(c);
+		    if (IS_SPCARG(c)) {
+			rb_warning0("`*' interpreted as argument prefix");
+			c = tSTAR;
+		    }
+		    else if (IS_BEG()) {
+			c = tSTAR;
+		    }
+		    else {
+			c = warn_balanced('*', "*", "argument prefix");
+		    }
+		}
+		SET_LEX_STATE(IS_AFTER_OPERATOR() ? EXPR_ARG : EXPR_BEG);
+		return c;
+
+	      case '!':
+		c = nextc();
+		if (IS_AFTER_OPERATOR()) {
+		    SET_LEX_STATE(EXPR_ARG);
+		    if (c == '@') {
+			return '!';
+		    }
+		}
+		else {
+		    SET_LEX_STATE(EXPR_BEG);
+		}
+		if (c == '=') {
+		    return tNEQ;
+		}
+		if (c == '~') {
+		    return tNMATCH;
+		}
+		pushback(c);
+		return '!';
+
+	      case '=':
+		if (was_bol()) {
+		    /* skip embedded rd document */
+		    if (strncmp(lex_p, "begin", 5) == 0 && ISSPACE(lex_p[5])) {
+			int first_p = TRUE;
+
+			lex_goto_eol(parser);
+			dispatch_scan_event(tEMBDOC_BEG);
+			for (;;) {
+			    lex_goto_eol(parser);
+			    if (!first_p) {
+				dispatch_scan_event(tEMBDOC);
+			    }
+			    first_p = FALSE;
+			    c = nextc();
+			    if (c == -1) {
+				compile_error(PARSER_ARG "embedded document meets end of file");
+				return 0;
+			    }
+			    if (c != '=') continue;
+			    if (c == '=' && strncmp(lex_p, "end", 3) == 0 &&
+				(lex_p + 3 == lex_pend || ISSPACE(lex_p[3]))) {
+				break;
+			    }
+			}
+			lex_goto_eol(parser);
+			dispatch_scan_event(tEMBDOC_END);
+			goto retry;
+		    }
+		}
+
+		SET_LEX_STATE(IS_AFTER_OPERATOR() ? EXPR_ARG : EXPR_BEG);
+		if ((c = nextc()) == '=') {
+		    if ((c = nextc()) == '=') {
+			return tEQQ;
+		    }
+		    pushback(c);
+		    return tEQ;
+		}
+		if (c == '~') {
+		    return tMATCH;
+		}
+		else if (c == '>') {
+		    return tASSOC;
+		}
+		pushback(c);
+		return '=';
+
+	      case '<':
+		last_state = lex_state;
+		c = nextc();
+		if (c == '<' &&
+		    !IS_lex_state(EXPR_DOT | EXPR_CLASS) &&
+		    !IS_END() &&
+		    (!IS_ARG() || IS_lex_state(EXPR_LABELED) || space_seen)) {
+		    int token = heredoc_identifier();
+		    if (token) return token;
+		}
+		if (IS_AFTER_OPERATOR()) {
+		    SET_LEX_STATE(EXPR_ARG);
+		}
+		else {
+		    if (IS_lex_state(EXPR_CLASS))
+			command_start = TRUE;
+		    SET_LEX_STATE(EXPR_BEG);
+		}
+		if (c == '=') {
+		    if ((c = nextc()) == '>') {
+			return tCMP;
+		    }
+		    pushback(c);
+		    return tLEQ;
+		}
+		if (c == '<') {
+		    if ((c = nextc()) == '=') {
+			set_yylval_id(tLSHFT);
+			SET_LEX_STATE(EXPR_BEG);
+			return tOP_ASGN;
+		    }
+		    pushback(c);
+		    return warn_balanced((enum ruby_method_ids)tLSHFT, "<<", "here document");
+		}
+		pushback(c);
+		return '<';
+
+	      case '>':
+		SET_LEX_STATE(IS_AFTER_OPERATOR() ? EXPR_ARG : EXPR_BEG);
+		if ((c = nextc()) == '=') {
+		    return tGEQ;
+		}
+		if (c == '>') {
+		    if ((c = nextc()) == '=') {
+			set_yylval_id(tRSHFT);
+			SET_LEX_STATE(EXPR_BEG);
+			return tOP_ASGN;
+		    }
+		    pushback(c);
+		    return tRSHFT;
+		}
+		pushback(c);
+		return '>';
+
+	      case '"':
+		label = (IS_LABEL_POSSIBLE() ? str_label : 0);
+		lex_strterm = NEW_STRTERM(str_dquote | label, '"', 0);
+		return tSTRING_BEG;
+
+	      case '`':
+		if (IS_lex_state(EXPR_FNAME)) {
+		    SET_LEX_STATE(EXPR_ENDFN);
+		    return c;
+		}
+		if (IS_lex_state(EXPR_DOT)) {
+		    if (cmd_state)
+			SET_LEX_STATE(EXPR_CMDARG);
+		    else
+			SET_LEX_STATE(EXPR_ARG);
+		    return c;
+		}
+		lex_strterm = NEW_STRTERM(str_xquote, '`', 0);
+		return tXSTRING_BEG;
+
+	      case '\'':
+		label = (IS_LABEL_POSSIBLE() ? str_label : 0);
+		lex_strterm = NEW_STRTERM(str_squote | label, '\'', 0);
+		return tSTRING_BEG;
+
+	      case '?':
+		return parse_qmark(parser, space_seen);
+
+	      case '&':
+		if ((c = nextc()) == '&') {
+		    SET_LEX_STATE(EXPR_BEG);
+		    if ((c = nextc()) == '=') {
+			set_yylval_id(tANDOP);
+			SET_LEX_STATE(EXPR_BEG);
+			return tOP_ASGN;
+		    }
+		    pushback(c);
+		    return tANDOP;
+		}
+		else if (c == '=') {
+		    set_yylval_id('&');
+		    SET_LEX_STATE(EXPR_BEG);
+		    return tOP_ASGN;
+		}
+		else if (c == '.') {
+		    SET_LEX_STATE(EXPR_DOT);
+		    return tANDDOT;
+		}
+		pushback(c);
+		if (IS_SPCARG(c)) {
+		    if ((c != ':') ||
+			(c = peekc_n(1)) == -1 ||
+			!(c == '\'' || c == '"' ||
+			  is_identchar((lex_p+1), lex_pend, current_enc))) {
+			rb_warning0("`&' interpreted as argument prefix");
+		    }
+		    c = tAMPER;
+		}
+		else if (IS_BEG()) {
+		    c = tAMPER;
+		}
+		else {
+		    c = warn_balanced('&', "&", "argument prefix");
+		}
+		SET_LEX_STATE(IS_AFTER_OPERATOR() ? EXPR_ARG : EXPR_BEG);
+		return c;
+
+	      case '|':
+		if ((c = nextc()) == '|') {
+		    SET_LEX_STATE(EXPR_BEG);
+		    if ((c = nextc()) == '=') {
+			set_yylval_id(tOROP);
+			SET_LEX_STATE(EXPR_BEG);
+			return tOP_ASGN;
+		    }
+		    pushback(c);
+		    return tOROP;
+		}
+		if (c == '=') {
+		    set_yylval_id('|');
+		    SET_LEX_STATE(EXPR_BEG);
+		    return tOP_ASGN;
+		}
+		SET_LEX_STATE(IS_AFTER_OPERATOR() ? EXPR_ARG : EXPR_BEG|EXPR_LABEL);
+		pushback(c);
+		return '|';
+
+	      case '+':
+		c = nextc();
+		if (IS_AFTER_OPERATOR()) {
+		    SET_LEX_STATE(EXPR_ARG);
+		    if (c == '@') {
+			return tUPLUS;
+		    }
+		    pushback(c);
+		    return '+';
+		}
+		if (c == '=') {
+            set_yylval_id('+');
+		    SET_LEX_STATE(EXPR_BEG);
+		    return tOP_ASGN;
+		}
+		if (IS_BEG() || (IS_SPCARG(c) && arg_ambiguous('+'))) {
+		    SET_LEX_STATE(EXPR_BEG);
+		    pushback(c);
+		    if (c != -1 && ISDIGIT(c)) {
+			return parse_numeric(parser, '+');
+		    }
+		    return tUPLUS;
+		}
+		SET_LEX_STATE(EXPR_BEG);
+		pushback(c);
+		return warn_balanced('+', "+", "unary operator");
+
+	      case '-':
+		c = nextc();
+		if (IS_AFTER_OPERATOR()) {
+		    SET_LEX_STATE(EXPR_ARG);
+		    if (c == '@') {
+			return tUMINUS;
+		    }
+		    pushback(c);
+		    return '-';
+		}
+		if (c == '=') {
+		    set_yylval_id('-');
+		    SET_LEX_STATE(EXPR_BEG);
+		    return tOP_ASGN;
+		}
+		if (c == '>') {
+		    SET_LEX_STATE(EXPR_ENDFN);
+		    token_info_push("->");
+		    return tLAMBDA;
+		}
+		if (IS_BEG() || (IS_SPCARG(c) && arg_ambiguous('-'))) {
+		    SET_LEX_STATE(EXPR_BEG);
+		    pushback(c);
+		    if (c != -1 && ISDIGIT(c)) {
+			return tUMINUS_NUM;
+		    }
+		    return tUMINUS;
+		}
+		SET_LEX_STATE(EXPR_BEG);
+		pushback(c);
+		return warn_balanced('-', "-", "unary operator");
+
+		case '0': case '1': case '2': case '3': case '4':
+		case '5': case '6': case '7': case '8': case '9':
+		    return parse_numeric(parser, c);
+
+		case ')':
+		case ']':
+		    paren_nest--;
+	      case '}':
+		COND_LEXPOP();
+		CMDARG_LEXPOP();
+		if (c == ')')
+		    SET_LEX_STATE(EXPR_ENDFN);
+		else
+		    SET_LEX_STATE(EXPR_END);
+		if (c == '}') {
+		    if (!brace_nest--) c = tSTRING_DEND;
+		}
+		return c;
+
+	      case '/':
+		if (IS_BEG()) {
+		    lex_strterm = NEW_STRTERM(str_regexp, '/', 0);
+		    return tREGEXP_BEG;
+		}
+		if ((c = nextc()) == '=') {
+		    set_yylval_id('/');
+		    SET_LEX_STATE(EXPR_BEG);
+		    return tOP_ASGN;
+		}
+		pushback(c);
+		if (IS_SPCARG(c)) {
+		    (void)arg_ambiguous('/');
+		    lex_strterm = NEW_STRTERM(str_regexp, '/', 0);
+		    return tREGEXP_BEG;
+		}
+		SET_LEX_STATE(IS_AFTER_OPERATOR() ? EXPR_ARG : EXPR_BEG);
+		return warn_balanced('/', "/", "regexp literal");
+
+	      case '^':
+		if ((c = nextc()) == '=') {
+		    set_yylval_id('^');
+		    SET_LEX_STATE(EXPR_BEG);
+		    return tOP_ASGN;
+		}
+		SET_LEX_STATE(IS_AFTER_OPERATOR() ? EXPR_ARG : EXPR_BEG);
+		pushback(c);
+		return '^';
+
+	      case ';':
+		SET_LEX_STATE(EXPR_BEG);
+		command_start = TRUE;
+		return ';';
+
+	      case ',':
+		SET_LEX_STATE(EXPR_BEG|EXPR_LABEL);
+		return ',';
+
+	      case '~':
+		if (IS_AFTER_OPERATOR()) {
+		    if ((c = nextc()) != '@') {
+			pushback(c);
+		    }
+		    SET_LEX_STATE(EXPR_ARG);
+		}
+		else {
+		    SET_LEX_STATE(EXPR_BEG);
+		}
+		return '~';
+
+	      case '(':
+		if (IS_BEG()) {
+		    c = tLPAREN;
+		}
+		else if (IS_SPCARG(-1)) {
+		    c = tLPAREN_ARG;
+		}
+		else if (IS_lex_state(EXPR_ENDFN) && space_seen && !lambda_beginning_p()) {
+		    rb_warning0("parentheses after method name is interpreted as "
+				"an argument list, not a decomposed argument");
+		}
+		else if (lex_state == (EXPR_END|EXPR_LABEL) && space_seen) {
+		    c = tLPAREN_ARG;
+		}
+		paren_nest++;
+		COND_PUSH(0);
+		CMDARG_PUSH(0);
+		SET_LEX_STATE(EXPR_BEG|EXPR_LABEL);
+		return c;
+
+	      case '[':
+		paren_nest++;
+		if (IS_AFTER_OPERATOR()) {
+		    if ((c = nextc()) == ']') {
+			SET_LEX_STATE(EXPR_ARG);
+			if ((c = nextc()) == '=') {
+			    return tASET;
+			}
+			pushback(c);
+			return tAREF;
+		    }
+		    pushback(c);
+		    SET_LEX_STATE(EXPR_ARG|EXPR_LABEL);
+		    return '[';
+		}
+		else if (IS_BEG()) {
+		    c = tLBRACK;
+		}
+		else if (IS_ARG() && (space_seen || IS_lex_state(EXPR_LABELED))) {
+		    c = tLBRACK;
+		}
+		SET_LEX_STATE(EXPR_BEG|EXPR_LABEL);
+		COND_PUSH(0);
+		CMDARG_PUSH(0);
+		return c;
+
+	      case '{':
+		++brace_nest;
+		if (lambda_beginning_p()) {
+		    SET_LEX_STATE(EXPR_BEG);
+		    lpar_beg = 0;
+		    --paren_nest;
+		    COND_PUSH(0);
+		    CMDARG_PUSH(0);
+		    return tLAMBEG;
+		}
+		if (IS_lex_state(EXPR_LABELED))
+		    c = tLBRACE;      /* hash */
+		else if (IS_lex_state(EXPR_ARG_ANY | EXPR_END | EXPR_ENDFN))
+		    c = '{';          /* block (primary) */
+		else if (IS_lex_state(EXPR_ENDARG))
+		    c = tLBRACE_ARG;  /* block (expr) */
+		else
+		    c = tLBRACE;      /* hash */
+		COND_PUSH(0);
+		CMDARG_PUSH(0);
+		SET_LEX_STATE(c == tLBRACE_ARG ? EXPR_BEG : EXPR_BEG|EXPR_LABEL);
+		if (c != tLBRACE) command_start = TRUE;
+		return c;
+
+	      case '\\':
+		c = nextc();
+		if (c == '\n') {
+		    space_seen = 1;
+		    dispatch_scan_event(tSP);
+		    goto retry; /* skip \\n */
+		}
+		pushback(c);
+		return '\\';
+
+	      case '%':
+		return parse_percent(parser, space_seen, last_state);
+
+	      case '$':
+		return parse_gvar(parser, last_state);
+
+	      case '@':
+		return parse_atmark(parser, last_state);
+
+	    default:
+		compile_error(PARSER_ARG  "Invalid char `\\x%02X' in expression", c);
+		goto retry;
+	    }
+	}
     }
 
     return parse_ident(parser, c, cmd_state);
