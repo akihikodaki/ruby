@@ -483,6 +483,23 @@ MSG
     RbConfig::expand(TRY_LINK.dup, conf)
   end
 
+  def link_shared_command(ldflags, opt="", libpath=$DEFLIBPATH|$LIBPATH)
+    librubyarg = $extmk ? $LIBRUBYARG_SHARED : "$(LIBRUBYARG_SHARED)"
+    conf = RbConfig::CONFIG.merge('hdrdir' => $hdrdir.quote,
+                                  'src' => "#{CONFTEST_C}",
+                                  'arch_hdrdir' => $arch_hdrdir.quote,
+                                  'top_srcdir' => $top_srcdir.quote,
+                                  'INCFLAGS' => "#$INCFLAGS",
+                                  'CPPFLAGS' => "#$CPPFLAGS",
+                                  'CFLAGS' => "#{CONFIG['CCDLFLAGS']} #$CFLAGS",
+                                  'ARCH_FLAG' => "#$ARCH_FLAG",
+                                  'DLDFLAGS' => "#$DLDFLAGS #{CONFIG['EXTDLDFLAGS']} #{ldflags}",
+                                  'LOCAL_LIBS' => "#$LOCAL_LIBS #$libs",
+                                  'LIBS' => "#{librubyarg} #{opt} #$LIBS")
+    conf['LIBPATH'] = libpathflag(libpath.map {|s| RbConfig::expand(s.dup, conf)})
+    RbConfig::expand(TRY_LINK_SHARED.dup, conf)
+  end
+
   def cc_command(opt="")
     conf = RbConfig::CONFIG.merge('hdrdir' => $hdrdir.quote, 'srcdir' => $srcdir.quote,
                                   'arch_hdrdir' => $arch_hdrdir.quote,
@@ -543,6 +560,27 @@ MSG
     exe
   ensure
     MakeMakefile.rm_rf(*Dir["#{CONFTEST}*"]-[exe])
+  end
+
+  def try_link0_shared(src, opt="", *opts, &b) # :nodoc:
+    so = "#{CONFTEST}.#{CONFIG['DLEXT']}"
+    cmd = link_shared_command("", opt)
+    if $universal
+      require 'tmpdir'
+      Dir.mktmpdir("mkmf_", oldtmpdir = ENV["TMPDIR"]) do |tmpdir|
+        begin
+          ENV["TMPDIR"] = tmpdir
+          try_do(src, cmd, *opts, &b)
+        ensure
+          ENV["TMPDIR"] = oldtmpdir
+        end
+      end
+    else
+      try_do(src, cmd, *opts, &b)
+    end and File.file?(so) or return nil
+    so
+  ensure
+    MakeMakefile.rm_rf(*Dir["#{CONFTEST}*"]-[so])
   end
 
   # Returns whether or not the +src+ can be compiled as a C source and linked
@@ -657,7 +695,20 @@ MSG
   end
 
   def try_ldflags(flags, opts = {})
-    try_link(MAIN_DOES_NOTHING, flags, {:werror => true}.update(opts))
+    if CROSS_COMPILING
+      try_link(MAIN_DOES_NOTHING, flags, {:werror => true}.update(opts))
+    elsif $static.nil?
+      try_run_shared(<<SRC, flags)
+#include "#{$hdrdir}/ruby.h"
+/*top*/
+void Init_conftest(void)
+{
+  rb_define_global_const("MKMF_CONFTEST", INT2FIX(42));
+}
+SRC
+    else
+      try_run(MAIN_DOES_NOTHING, flags)
+    end
   end
 
   def append_ldflags(flags, *opts)
@@ -868,6 +919,25 @@ SRC
     raise "cannot run test program while cross compiling" if CROSS_COMPILING
     if try_link0(src, opt, &b)
       xsystem("./#{CONFTEST}")
+    else
+      nil
+    end
+  ensure
+    MakeMakefile.rm_f "#{CONFTEST}*"
+  end
+
+  def try_run_shared(src, opt = "", &b) # :nodoc:
+    if CROSS_COMPILING
+      raise "cannot run test shared library extension while cross compiling"
+    end
+
+    unless $static.nil?
+      raise "cannot run test shared library extension with static link configuration"
+    end
+
+    if try_link0_shared(src, opt, &b)
+      conftest = Shellwords.escape(File.absolute_path(CONFTEST))
+      xsystem(RbConfig::expand(%{#{$ruby} -r#{conftest}.$(DLEXT) -e "exit(MKMF_CONFTEST == 42)"}))
     else
       nil
     end
@@ -2682,6 +2752,10 @@ MESSAGE
   TRY_LINK = config_string('TRY_LINK') ||
     "$(CC) #{OUTFLAG}#{CONFTEST}#{$EXEEXT} $(INCFLAGS) $(CPPFLAGS) " \
     "$(CFLAGS) $(src) $(LIBPATH) $(LDFLAGS) $(ARCH_FLAG) $(LOCAL_LIBS) $(LIBS)"
+
+  TRY_LINK_SHARED = config_string('TRY_LINK_SHARED') ||
+    "$(LDSHARED) #{OUTFLAG}#{CONFTEST}.#{CONFIG['DLEXT']} $(INCFLAGS) $(CPPFLAGS) " \
+    "$(CFLAGS) $(src) $(LIBPATH) $(DLDFLAGS) $(ARCH_FLAG) $(LOCAL_LIBS) $(LIBS)"
 
   ##
   # Command which will link a shared library
